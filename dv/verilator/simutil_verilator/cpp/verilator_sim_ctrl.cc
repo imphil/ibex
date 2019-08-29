@@ -39,7 +39,8 @@ VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel* top, CData& sig_clk,
       reset_duration_cycles_(2),
       request_stop_(false),
       tracer_(VerilatedTracer()),
-      term_after_cycles_(0) {}
+      term_after_cycles_(0),
+      callback_(NULL) {}
 
 void VerilatorSimCtrl::RequestStop() { request_stop_ = true; }
 
@@ -258,6 +259,10 @@ const char* VerilatorSimCtrl::GetSimulationFileName() const {
 #endif
 }
 
+void VerilatorSimCtrl::AddCallback(std::function<int(int)> callback) {
+  callback_ = callback;
+}
+
 void VerilatorSimCtrl::Run() {
   // We always need to enable this as tracing can be enabled at runtime
   if (tracing_possible_) {
@@ -283,6 +288,12 @@ void VerilatorSimCtrl::Run() {
     }
 
     sig_clk_ = !sig_clk_;
+
+    if (sig_clk_) {
+      if (callback_ != NULL) {
+        request_stop_ |= callback_(0);
+      }
+    }
 
     top_->eval();
     time_++;

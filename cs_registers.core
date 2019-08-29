@@ -1,0 +1,82 @@
+CAPI=2:
+# Copyright lowRISC contributors.
+# Licensed under the Apache License, Version 2.0, see LICENSE for details.
+# SPDX-License-Identifier: Apache-2.0
+
+name: "lowrisc:dv_verilator:cs_registers"
+description: "Verilator registers testbench"
+filesets:
+  files_sim_verilator:
+    depend:
+      - lowrisc:dv_verilator:simutil_verilator
+
+    files:
+      - dv/verilator/cs_registers/cpp/register_driver.cc
+      - dv/verilator/cs_registers/cpp/reg_env.cc
+      - dv/verilator/cs_registers/cpp/register_model.cc
+      - dv/verilator/cs_registers/cpp/reg_tb.cc
+      - dv/verilator/cs_registers/cpp/register_driver.h: { is_include_file: true }
+      - dv/verilator/cs_registers/cpp/reg_env.h: { is_include_file: true }
+      - dv/verilator/cs_registers/cpp/register_model.h: { is_include_file: true }
+    file_type: cppSource
+
+  files_rtl:
+    files:
+# ram_1p included to make DPI calls link
+      - dv/riscv_compliance/rtl/ram_1p.sv
+      - rtl/ibex_pkg.sv
+      - rtl/ibex_cs_registers.sv
+    file_type: systemVerilogSource
+
+
+parameters:
+  PMPEnable:
+    datatype: bool
+    paramtype: vlogparam
+    default: true
+    description: PMP enabled [true/false]
+  PMPNumRegions:
+    datatype: int
+    paramtype: vlogparam
+    default: 4
+    description: Number of implemented PMP regions [0/16]
+  PMPGranularity:
+    datatype: int
+    paramtype: vlogparam
+    default: 0
+    description: Minimum PMP matching granularity [0/31]
+
+targets:
+  default:
+    default_tool: verilator
+    filesets:
+      - files_rtl
+      - files_sim_verilator
+    parameters:
+      - PMPEnable
+      - PMPNumRegions
+      - PMPGranularity
+    toplevel: ibex_cs_registers
+    tools:
+      verilator:
+        mode: cc
+        verilator_options:
+# Disabling tracing reduces compile times by multiple times, but doesn't have a
+# huge influence on runtime performance. (Based on early observations.)
+          - '--trace'
+          - '--trace-fst' # this requires -DVM_TRACE_FMT_FST in CFLAGS below!
+          - '--trace-structs'
+          - '--trace-params'
+          - '--trace-max-array 1024'
+# compiler flags
+#
+# -O
+#   Optimization levels have a large impact on the runtime performance of the
+#   simulation model. -O2 and -O3 are pretty similar, -Os is slower than -O2/-O3
+          - '-CFLAGS "-std=c++11 -Wall -DVM_TRACE -DVM_TRACE_FMT_FST -g -O0"'
+          - '-LDFLAGS "-pthread -lutil"'
+          - "-Wall"
+          - "-Wno-PINCONNECTEMPTY"
+          # XXX: Cleanup all warnings and remove this option
+          # (or make it more fine-grained at least)
+          - "-Wno-fatal"

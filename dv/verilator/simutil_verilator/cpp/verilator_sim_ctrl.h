@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <string>
+#include <functional>
 
 #include "verilated_toplevel.h"
 
@@ -122,6 +123,13 @@ class VerilatorSimCtrl {
 
   const char* GetSimulationFileName() const;
 
+  /**
+   * Add a callback function to run every cycle
+   */
+  void AddCallback(std::function<int(int)> callback);
+
+  int seed;
+
  private:
   VerilatedToplevel* top_;
   CData& sig_clk_;
@@ -145,6 +153,7 @@ class VerilatorSimCtrl {
   std::chrono::steady_clock::time_point time_end_;
   VerilatedTracer tracer_;
   int term_after_cycles_;
+  std::function<int(int)> callback_;
 
   unsigned int GetExecutionTimeMs();
   void SetReset();
