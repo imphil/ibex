@@ -11,6 +11,8 @@
 
 #include <iostream>
 
+#include "verilated_toplevel.h"
+
 // This is defined by Verilator and passed through the command line
 #ifndef VM_TRACE
 #define VM_TRACE 0

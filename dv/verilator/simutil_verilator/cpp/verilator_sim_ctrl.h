@@ -10,7 +10,9 @@
 #include <chrono>
 #include <string>
 
-#include "verilated_toplevel.h"
+#include "verilated_tracer.h"
+
+class VerilatedToplevel;
 
 enum VerilatorSimCtrlFlags {
   Defaults = 0,

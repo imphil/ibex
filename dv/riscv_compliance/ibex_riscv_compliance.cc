@@ -8,11 +8,10 @@
 
 #include "Vibex_riscv_compliance.h"
 #include "verilated_toplevel.h"
+
 #include "verilator_sim_ctrl.h"
 
-VERILATED_TOPLEVEL(ibex_riscv_compliance)
-
-ibex_riscv_compliance *top;
+VerilatedToplevel *top;
 VerilatorSimCtrl *simctrl;
 
 static void SignalHandler(int sig) {
@@ -54,7 +53,9 @@ double sc_time_stamp() { return simctrl->GetTime(); }
 
 int main(int argc, char **argv) {
   int retcode;
-  top = new ibex_riscv_compliance;
+  top = new VerilatedToplevel();
+
+
   simctrl = new VerilatorSimCtrl(top, top->IO_CLK, top->IO_RST_N,
                                  VerilatorSimCtrlFlags::ResetPolarityNegative);
 
