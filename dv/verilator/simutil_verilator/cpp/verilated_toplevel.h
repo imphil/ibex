@@ -5,7 +5,23 @@
 #ifndef VERILATED_TOPLEVEL_H_
 #define VERILATED_TOPLEVEL_H_
 
+#ifndef TOPLEVEL_NAME
+#error "TOPLEVEL_NAME must be set to the name of the toplevel."
+#endif
+
 #include <verilated.h>
+
+#define STR(s) #s
+
+// Include Verilator-generated toplevel
+#define VERILATED_TOPLEVEL_HEADER_STR2(s) STR(V##s)
+#define VERILATED_TOPLEVEL_HEADER_STR(s) VERILATED_TOPLEVEL_HEADER_STR2(s)
+#include VERILATED_TOPLEVEL_HEADER_STR(TOPLEVEL_NAME.h)
+
+// Name of the Verilated class
+#define VERILATED_TOPLEVEL_NAME3(s) V##s
+#define VERILATED_TOPLEVEL_NAME2(s) VERILATED_TOPLEVEL_NAME3(s)
+#define VERILATED_TOPLEVEL_NAME VERILATED_TOPLEVEL_NAME2(TOPLEVEL_NAME)
 
 // VM_TRACE_FMT_FST must be set by the user when calling Verilator with
 // --trace-fst. VM_TRACE is set by Verilator itself.
@@ -107,27 +123,18 @@ public:
   virtual void trace(VerilatedTracer& tfp, int levels, int options) = 0;
 };
 
-#define STR(s) #s
-
-#if VM_TRACE == 1
-#define VERILATED_TOPLEVEL_TRACE_CALL(topname) \
-  V##topname::trace(static_cast<VM_TRACE_CLASS_NAME*>(tfp), levels, options);
-#else
-#define VERILATED_TOPLEVEL_TRACE_CALL(topname) \
-  assert(0 && "Tracing not enabled.");
-#endif
-
-
-#define VERILATED_TOPLEVEL(topname)                                            \
-  class topname : public V##topname, public VerilatedToplevel {                \
-   public:                                                                     \
-    topname(const char* name="TOP") : V##topname(name), VerilatedToplevel() {} \
-    const char* name() const { return STR(topname); }                          \
-    void eval() { V##topname::eval(); }                                        \
-    void final() { V##topname::final(); }                                      \
-    void trace(VerilatedTracer& tfp, int levels, int options=0) {              \
-      VERILATED_TOPLEVEL_TRACE_CALL(topname)                                   \
-    }                                                                          \
-  };
+class TOPLEVEL_NAME : public VERILATED_TOPLEVEL_NAME, public VerilatedToplevel {
+public:
+  TOPLEVEL_NAME(const char *name = "TOP")
+      : VERILATED_TOPLEVEL_NAME(name), VerilatedToplevel() {}
+  const char *name() const { return STR(TOPLEVEL_NAME); }
+  void eval() { VERILATED_TOPLEVEL_NAME::eval(); }
+  void final() { VERILATED_TOPLEVEL_NAME::final(); }
+  void trace(VerilatedTracer &tfp, int levels, int options = 0) {
+    assert(VM_TRACE && "Tracing not enabled.");
+    VERILATED_TOPLEVEL_NAME::trace(static_cast<VM_TRACE_CLASS_NAME *>(tfp),
+                                   levels, options);
+  }
+};
 
 #endif // VERILATED_TOPLEVEL_H_
