@@ -1,4 +1,3 @@
-#include "Vibex_cs_registers.h"
 #include "verilated_toplevel.h"
 #include "verilator_sim_ctrl.h"
 
@@ -8,8 +7,6 @@
 #include <functional>
 #include <iostream>
 #include <signal.h>
-
-VERILATED_TOPLEVEL(ibex_cs_registers)
 
 ibex_cs_registers *top;
 VerilatorSimCtrl *simctrl;

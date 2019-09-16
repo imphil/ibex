@@ -173,55 +173,57 @@ void RegisterModel::RegisterReset() {
 }
 
 void RegisterModel::OnClock() {
-  if (!dut_->rst_ni) {
+  ibex_cs_registers* dut_cs_registers = dynamic_cast<ibex_cs_registers*>(dut_);
+
+  if (!dut_cs_registers->rst_ni) {
     RegisterReset();
-    return 0;
+    return;
   }
   // TODO add machine mode permissions to registers
-  if (dut_->csr_access_i && dut_->instr_new_id_i) {
+  if (dut_cs_registers->csr_access_i && dut_cs_registers->instr_new_id_i) {
     uint32_t read_val;
     bool matched = 0;
     for (std::vector<BaseRegister *>::iterator it = register_map_.begin();
          it != register_map_.end(); ++it) {
-      if ((*it)->MatchAddr(dut_->csr_addr_i)) {
+      if ((*it)->MatchAddr(dut_cs_registers->csr_addr_i)) {
         matched = 1;
-        switch (dut_->->csr_op_i) {
+        switch (dut_cs_registers->csr_op_i) {
         case 0: {
           read_val = (*it)->RegisterRead();
           break;
         }
         case 1: {
-          read_val = (*it)->RegisterWrite(dut_->csr_wdata_i);
+          read_val = (*it)->RegisterWrite(dut_cs_registers->csr_wdata_i);
           break;
         }
         case 2: {
-          read_val = (*it)->RegisterSet(dut_->csr_wdata_i);
+          read_val = (*it)->RegisterSet(dut_cs_registers->csr_wdata_i);
           break;
         }
         case 3: {
-          read_val = (*it)->RegisterClear(dut_->csr_wdata_i);
+          read_val = (*it)->RegisterClear(dut_cs_registers->csr_wdata_i);
           break;
         }
         }
-        if (read_val != dut_->csr_rdata_o) {
+        if (read_val != dut_cs_registers->csr_rdata_o) {
           std::cout << "Error, reg_read addr: " << std::hex
-                    << dut_->csr_addr_i << std::endl;
+                    << dut_cs_registers->csr_addr_i << std::endl;
           std::cout << "Expected: " << read_val
-                    << " Got: " << dut_->csr_rdata_o << std::endl;
-          return 1;
+                    << " Got: " << dut_cs_registers->csr_rdata_o << std::endl;
+          return;
         }
       }
     }
     if (!matched) {
       // Non existant register
-      if (!dut_->illegal_csr_insn_o) {
+      if (!dut_cs_registers->illegal_csr_insn_o) {
         std::cout << "Non-existant register: " << std::hex
-                  << dut_->csr_addr_i << std::endl;
+                  << dut_cs_registers->csr_addr_i << std::endl;
         std::cout << " Should have signalled an error." << std::endl;
-        return 1;
+        return;
       }
-      return 0;
+      return;
     }
   }
-  return 0;
+  return;
 }

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "register_driver.h"
-#include "Vibex_cs_registers.h"
+#include "verilated_toplevel.h"
 
 void RegisterDriver::OnInitial() {
   delay_ = 1;
@@ -34,11 +34,12 @@ void RegisterDriver::Randomize() {
 }
 
 void RegisterDriver::DriveSignals() {
-  dut_->csr_access_i = reg_access_;
-  dut_->instr_new_id_i = reg_access_;
-  dut_->csr_addr_i = reg_addr_;
-  dut_->csr_wdata_i = reg_wdata_;
-  dut_->csr_op_i = reg_op_;
+  ibex_cs_registers* dut_cs_registers = dynamic_cast<ibex_cs_registers*>(dut_);
+  dut_cs_registers->csr_access_i = reg_access_;
+  dut_cs_registers->instr_new_id_i = reg_access_;
+  dut_cs_registers->csr_addr_i = reg_addr_;
+  dut_cs_registers->csr_wdata_i = reg_wdata_;
+  dut_cs_registers->csr_op_i = reg_op_;
 }
 
 void RegisterDriver::OnClock() {
