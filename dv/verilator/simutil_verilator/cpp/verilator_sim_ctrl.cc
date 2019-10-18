@@ -4,7 +4,10 @@
 
 #include "verilator_sim_ctrl.h"
 
+#include <fcntl.h>
+#include <gelf.h>
 #include <getopt.h>
+#include <libelf.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -56,6 +59,7 @@ double sc_time_stamp() {
 // DPI Exports
 extern "C" {
 extern void simutil_verilator_memload(const char *file);
+extern void simutil_verilator_set_mem(int index, const svLogicVecVal *val);
 }
 
 VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel *top, CData &sig_clk,
@@ -157,15 +161,65 @@ void VerilatorSimCtrl::PrintHelp() const {
   if (tracing_possible_) {
     std::cout << "-t|--trace                Write trace file from the start\n";
   }
-  std::cout << "-r|--rominit=VMEMFILE     Initialize the ROM with VMEMFILE\n"
-               "-m|--raminit=VMEMFILE     Initialize the RAM with VMEMFILE\n"
-               "-f|--flashinit=VMEMFILE   Initialize the FLASH with VMEMFILE\n"
+  std::cout << "-r|--rominit=FILE      Initialize the ROM with FILE (elf/vmem)\n"
+               "-m|--raminit=FILE      Initialize the RAM with FILE (elf/vmem)\n"
+               "-f|--flashinit=FILE    Initialize the FLASH with FILE (elf/vmem)\n"
                "-c|--term-after-cycles=N  Terminate simulation after N cycles\n"
-               "-h|--help                 Show help\n"
+               "-h|--help              Show help\n"
                "\n"
                "All further arguments are passed to the design and can be used "
                "in the \n"
                "design, e.g. by DPI modules.\n";
+}
+
+MemInitType VerilatorSimCtrl::ExtractTypeFromName(std::string filename) {
+  size_t ext_pos = filename.find_last_of(".");
+  std::string ext = filename.substr(ext_pos + 1);
+  if (ext_pos == std::string::npos || (ext.compare("elf") == 0)) {
+    // Executable file might not have an extension
+    return kElf;
+  } else if (ext.compare("vmem") == 0) {
+    return kVmem;
+  }
+  return kUnknown;
+}
+
+bool VerilatorSimCtrl::InitMem(std::string mem_location,
+                               std::string storage_file) {
+  uint8_t *buf;
+  size_t len_bytes;
+  svScope scope;
+
+  scope = svGetScopeFromName(mem_location.data());
+  if (!scope) {
+    std::cerr << "ERROR: No Memory found at " << mem_location << std::endl;
+    exit(1);
+  }
+  svSetScope(scope);
+
+  bool retval = true;
+
+  switch (ExtractTypeFromName(storage_file)) {
+    case kElf:
+      // elf file might have no extension at all
+      retval = ElfFileToBinary(storage_file.data(), (void **)&buf, len_bytes);
+      if (!retval) {
+        break;
+      }
+
+      for (int i = 0; i < len_bytes / 4; ++i) {
+        simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i]);
+      }
+      free(buf);
+      break;
+    case kVmem:
+      simutil_verilator_memload(storage_file.data());
+      break;
+    case kUnknown:
+    default:
+      return false;
+  }
+  return retval;
 }
 
 void VerilatorSimCtrl::InitRom(std::string rom) {
@@ -173,20 +227,11 @@ void VerilatorSimCtrl::InitRom(std::string rom) {
     return;
   }
 
-  svScope scope;
-
-  scope = svGetScopeFromName(rom.data());
-  if (!scope) {
-    std::cerr << "ERROR: No ROM found at " << rom << std::endl;
-    exit(1);
+  if (InitMem(rom, rom_init_file_)) {
+    std::cout << std::endl
+              << "Rom initialized with program " << rom_init_file_
+              << std::endl;
   }
-  svSetScope(scope);
-
-  simutil_verilator_memload(rom_init_file_.data());
-
-  std::cout << std::endl
-            << "Rom initialized with program at " << rom_init_file_
-            << std::endl;
 }
 
 void VerilatorSimCtrl::InitRam(std::string ram) {
@@ -194,20 +239,11 @@ void VerilatorSimCtrl::InitRam(std::string ram) {
     return;
   }
 
-  svScope scope;
-
-  scope = svGetScopeFromName(ram.data());
-  if (!scope) {
-    std::cerr << "ERROR: No RAM found at " << ram << std::endl;
-    exit(1);
+  if (InitMem(ram, ram_init_file_)) {
+    std::cout << std::endl
+              << "Ram initialized with program " << ram_init_file_
+              << std::endl;
   }
-  svSetScope(scope);
-
-  simutil_verilator_memload(ram_init_file_.data());
-
-  std::cout << std::endl
-            << "Ram initialized with program at " << ram_init_file_
-            << std::endl;
 }
 
 void VerilatorSimCtrl::InitFlash(std::string flash) {
@@ -215,20 +251,11 @@ void VerilatorSimCtrl::InitFlash(std::string flash) {
     return;
   }
 
-  svScope scope;
-
-  scope = svGetScopeFromName(flash.data());
-  if (!scope) {
-    std::cerr << "ERROR: No FLASH found at " << flash << std::endl;
-    exit(1);
+  if (InitMem(flash, flash_init_file_)) {
+    std::cout << std::endl
+              << "Flash initialized with program " << flash_init_file_
+              << std::endl;
   }
-  svSetScope(scope);
-
-  simutil_verilator_memload(flash_init_file_.data());
-
-  std::cout << std::endl
-            << "Flash initialized with program at " << flash_init_file_
-            << std::endl;
 }
 
 bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
@@ -473,4 +500,109 @@ void VerilatorSimCtrl::PrintStatistics() {
   if (tracing_enabled_ && FileSize(GetSimulationFileName(), trace_size_byte)) {
     std::cout << "Trace file size:  " << trace_size_byte << " B" << std::endl;
   }
+}
+
+bool VerilatorSimCtrl::ElfFileToBinary(std::string file_name, void **data,
+                                       size_t &len_bytes) {
+  bool retval;
+  std::list<BufferDesc> buffers;
+  size_t offset = 0;
+  (void)elf_errno();
+  len_bytes = 0;
+
+  if (elf_version(EV_CURRENT) == EV_NONE) {
+    std::cerr << elf_errmsg(-1) << std::endl;
+    return false;
+  }
+
+  int fd = open(file_name.c_str(), O_RDONLY, 0);
+  if (fd < 0) {
+    std::cerr << "Could not open file: " << file_name << std::endl;
+    return false;
+  }
+
+  Elf *elf_desc;
+  elf_desc = elf_begin(fd, ELF_C_READ, NULL);
+  if (elf_desc == NULL) {
+    std::cerr << elf_errmsg(-1) << " in: " << file_name << std::endl;
+    retval = false;
+    goto return_fd_end;
+  }
+  if (elf_kind(elf_desc) != ELF_K_ELF) {
+    std::cerr << "Not a ELF file: " << file_name << std::endl;
+    retval = false;
+    goto return_elf_end;
+  }
+  // TODO: add support for ELFCLASS64
+  if (gelf_getclass(elf_desc) != ELFCLASS32) {
+    std::cerr << "Not a 32-bit ELF file: " << file_name << std::endl;
+    retval = false;
+    goto return_elf_end;
+  }
+
+  size_t phnum;
+  if (elf_getphdrnum(elf_desc, &phnum) != 0) {
+    std::cerr << elf_errmsg(-1) << " in: " << file_name << std::endl;
+    retval = false;
+    goto return_elf_end;
+  }
+
+  GElf_Phdr phdr;
+  Elf_Data *elf_data;
+  elf_data = NULL;
+  for (size_t i = 0; i < phnum; i++) {
+    if (gelf_getphdr(elf_desc, i, &phdr) == NULL) {
+      std::cerr << elf_errmsg(-1) << " segment number: " << i
+                << " in: " << file_name << std::endl;
+      retval = false;
+      goto return_elf_end;
+    }
+    if (phdr.p_type != PT_LOAD) {
+      std::cout << "Program header number " << i << "is not of type PT_LOAD."
+                << "Continue." << std::endl;
+      continue;
+    }
+    elf_data = elf_getdata_rawchunk(elf_desc, phdr.p_offset, phdr.p_filesz,
+                                    ELF_T_BYTE);
+
+    if (elf_data == NULL) {
+      retval = false;
+      goto return_elf_end;
+    }
+
+    BufferDesc buf_data;
+    buf_data.length = elf_data->d_size;
+    len_bytes += buf_data.length;
+    buf_data.data = (uint8_t *)malloc(elf_data->d_size);
+    memcpy(buf_data.data, ((uint8_t *)elf_data->d_buf), buf_data.length);
+    buffers.push_back(buf_data);
+
+    size_t init_zeros = phdr.p_memsz - phdr.p_filesz;
+    if (init_zeros > 0) {
+      BufferDesc buf_zeros;
+      buf_zeros.length = init_zeros;
+      len_bytes += buf_zeros.length;
+      buf_zeros.data = (uint8_t *)calloc(1, buf_zeros.length);
+      buffers.push_back(buf_zeros);
+    }
+  }
+
+  // Put the collected data into a continuous buffer
+  // Memory is freed by the caller
+  *data = (uint8_t *)malloc(len_bytes);
+  for (std::list<BufferDesc>::iterator it = buffers.begin();
+       it != buffers.end(); ++it) {
+    memcpy(((uint8_t *)*data) + offset, it->data, it->length);
+    offset += it->length;
+    free(it->data);
+  }
+  buffers.clear();
+
+  retval = true;
+
+return_elf_end:
+  elf_end(elf_desc);
+return_fd_end:
+  close(fd);
+  return retval;
 }

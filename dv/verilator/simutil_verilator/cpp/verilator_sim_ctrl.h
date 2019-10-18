@@ -22,6 +22,17 @@ enum VerilatorSimCtrlFlags {
 // The parameter is simulation time
 typedef std::function<void(int /* sim time */)> SimCtrlCallBack;
 
+enum MemInitType {
+  kUnknown = 0,
+  kElf,
+  kVmem,
+};
+
+struct BufferDesc {
+  uint8_t *data;
+  size_t length;
+};
+
 class VerilatorSimCtrl {
  public:
   VerilatorSimCtrl(VerilatedToplevel *top, CData &clk, CData &rst_n,
@@ -197,6 +208,9 @@ class VerilatorSimCtrl {
   bool IsFileReadable(std::string filepath);
   bool FileSize(std::string filepath, int &size_byte);
   void Trace();
+  bool ElfFileToBinary(std::string file_name, void **data, size_t &len_bytes);
+  bool InitMem(std::string mem_location, std::string storage_file);
+  MemInitType ExtractTypeFromName(std::string filename);
 };
 
 #endif  // VERILATOR_SIM_CTRL_H_

@@ -51,12 +51,23 @@ module ram_1p #(
   end
 
   `ifdef VERILATOR
+    // Task for loading 'mem' with SystemVerilog system task readmemh
     export "DPI-C" task simutil_verilator_memload;
+    // Function for setting a specific 32 bit element in 'mem'
+    export "DPI-C" function simutil_verilator_set_mem;
 
     task simutil_verilator_memload;
     input string file;
     $readmemh(file, mem);
     endtask
+
+    // TODO: Allow 'val' to have other widths than 32 bit
+    function void simutil_verilator_set_mem(input int index,
+      input logic[31:0] val);
+      if (index < Depth) begin
+        mem[index] = val;
+      end
+    endfunction
   `endif
 
   `ifdef SRAM_INIT_FILE
