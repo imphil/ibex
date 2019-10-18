@@ -10,6 +10,7 @@
 #include <chrono>
 #include <string>
 #include <functional>
+#include <map>
 
 #include "verilated_toplevel.h"
 
@@ -24,8 +25,16 @@ typedef std::function<void(int /* sim time */)> SimCtrlCallBack;
 
 enum MemInitType {
   kUnknown = 0,
+  kEmpty,
   kElf,
   kVmem,
+};
+
+struct MemArea {
+  std::string name;      // Unique identifier
+  std::string location;  // Design scope location
+  std::string path;      // System file path
+  MemInitType type;      // Type of init file
 };
 
 struct BufferDesc {
@@ -90,19 +99,18 @@ class VerilatorSimCtrl {
   void Run();
 
   /**
-   * Initialize Rom
+   * Register a memory as instantiated by generic ram
+   *
+   * The |name| must be a unique identifier. The function will return false
+   * if |name| is already used. |location| is the path to the scope of the
+   * instantiated memory, which needs to support the DPI-C interfaces
+   * 'simutil_verilator_memload' and 'simutil_verilator_set_mem' used for
+   * 'vmem' and 'elf' files, respectively.
+   *
+   * Memories must be registered before command arguments are parsed by
+   * ParseCommandArgs() in order for them to be known.
    */
-  void InitRom(const std::string mem);
-
-  /**
-   * Initialize Ram
-   */
-  void InitRam(const std::string mem);
-
-  /**
-   * Initialize Flash
-   */
-  void InitFlash(const std::string mem);
+  bool RegisterMemoryArea(const std::string name, const std::string location);
 
   /**
    * Get the current time in ticks
@@ -182,12 +190,6 @@ class VerilatorSimCtrl {
   CData &sig_rst_;
   VerilatorSimCtrlFlags flags_;
   unsigned long time_;
-  bool init_rom_;
-  bool init_ram_;
-  bool init_flash_;
-  std::string rom_init_file_;
-  std::string ram_init_file_;
-  std::string flash_init_file_;
   bool tracing_enabled_;
   bool tracing_enabled_changed_;
   bool tracing_ever_enabled_;
@@ -199,6 +201,7 @@ class VerilatorSimCtrl {
   std::chrono::steady_clock::time_point time_begin_;
   std::chrono::steady_clock::time_point time_end_;
   VerilatedTracer tracer_;
+  std::map<std::string, MemArea> mem_register_;
   int term_after_cycles_;
   SimCtrlCallBack callback_;
 
@@ -209,8 +212,14 @@ class VerilatorSimCtrl {
   bool FileSize(std::string filepath, int &size_byte);
   void Trace();
   bool ElfFileToBinary(std::string file_name, void **data, size_t &len_bytes);
-  bool InitMem(std::string mem_location, std::string storage_file);
+  bool InitMem(std::string mem_argument, int &retcode);
   MemInitType ExtractTypeFromName(std::string filename);
+  MemInitType GetMemInitType(std::string name);
+  bool ParseMemArg(std::string mem_argument, MemArea *m, int &retcode);
+  bool MemWrite(MemArea &m, int &retcode);
+  bool MemWriteElf(const std::string path, int &retcode);
+  void MemWriteVmem(const std::string path);
+  void PrintMemRegions();
 };
 
 #endif  // VERILATOR_SIM_CTRL_H_

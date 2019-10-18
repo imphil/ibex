@@ -19,13 +19,11 @@ int main(int argc, char **argv) {
                                  VerilatorSimCtrlFlags::ResetPolarityNegative);
 
   // Setup simctrl
+  simctrl->RegisterMemoryArea("ram", "TOP.ibex_riscv_compliance.u_ram");
   retcode = simctrl->SetupSimulation(argc, argv);
   if (retcode != 0) {
     goto free_return;
   }
-
-  // Initialize RAM
-  simctrl->InitRam("TOP.ibex_riscv_compliance.u_ram");
 
   // Run the simulation
   simctrl->RunSimulation();

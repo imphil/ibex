@@ -8,8 +8,11 @@
 #include <gelf.h>
 #include <getopt.h>
 #include <libelf.h>
+#include <map>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sysexits.h>
+#include <utility>
 #include <unistd.h>
 #include <vltstd/svdpi.h>
 
@@ -69,9 +72,6 @@ VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel *top, CData &sig_clk,
       sig_rst_(sig_rst),
       flags_(flags),
       time_(0),
-      init_rom_(false),
-      init_ram_(false),
-      init_flash_(false),
       tracing_enabled_(false),
       tracing_enabled_changed_(false),
       tracing_ever_enabled_(false),
@@ -159,117 +159,200 @@ void VerilatorSimCtrl::PrintHelp() const {
             << "\n"
                "\n";
   if (tracing_possible_) {
-    std::cout << "-t|--trace                Write trace file from the start\n";
+    std::cout << "-t|--trace                    Write a trace file from the"
+                 " start\n";
   }
-  std::cout << "-r|--rominit=FILE      Initialize the ROM with FILE (elf/vmem)\n"
-               "-m|--raminit=FILE      Initialize the RAM with FILE (elf/vmem)\n"
-               "-f|--flashinit=FILE    Initialize the FLASH with FILE (elf/vmem)\n"
+  std::cout << "-m|--meminit=name,file[,type] Initialize memory NAME with FILE"
+               " [of TYPE]\n"
+               "                              TYPE is either 'elf' or 'vmem'\n"
+               "                              Use \"list\" for NAME without "
+               "FILE or TYPE to print registered memory regions\n"
                "-c|--term-after-cycles=N  Terminate simulation after N cycles\n"
-               "-h|--help              Show help\n"
+               "-h|--help                     Show help\n"
                "\n"
                "All further arguments are passed to the design and can be used "
                "in the \n"
                "design, e.g. by DPI modules.\n";
 }
 
-MemInitType VerilatorSimCtrl::ExtractTypeFromName(std::string filename) {
-  size_t ext_pos = filename.find_last_of(".");
-  std::string ext = filename.substr(ext_pos + 1);
-  if (ext_pos == std::string::npos || (ext.compare("elf") == 0)) {
-    // Executable file might not have an extension
+bool VerilatorSimCtrl::RegisterMemoryArea(const std::string name,
+                                          const std::string location) {
+  MemArea mem = {.name = name, .location = location};
+
+  auto ret = mem_register_.emplace(name, mem);
+  if (ret.second == false) {
+      std::cerr << "ERROR: Can not register \"" << name << "\" at: \""
+                << location << "\" (Previously defined at: \""
+                << ret.first->second.location << "\")" << std::endl;
+      return false;
+  }
+  return true;
+}
+
+MemInitType VerilatorSimCtrl::GetMemInitType(std::string name) {
+  if (name.compare("elf") == 0) {
     return kElf;
-  } else if (ext.compare("vmem") == 0) {
+  } else if (name.compare("vmem") == 0) {
     return kVmem;
   }
   return kUnknown;
 }
 
-bool VerilatorSimCtrl::InitMem(std::string mem_location,
-                               std::string storage_file) {
-  uint8_t *buf;
-  size_t len_bytes;
+MemInitType VerilatorSimCtrl::ExtractTypeFromName(std::string filename) {
+  size_t ext_pos = filename.find_last_of(".");
+  std::string ext = filename.substr(ext_pos + 1);
+
+  if (ext_pos == std::string::npos) {
+    return kEmpty;
+  }
+  return GetMemInitType(ext);
+}
+
+void VerilatorSimCtrl::PrintMemRegions() {
+  std::cout << "Registerd memory regions:" << std::endl;
+  for (const auto &m : mem_register_) {
+    std::cout << "\t'" << m.second.name << "' at location: '"
+              << m.second.location << "'" << std::endl;
+  }
+}
+
+/// Initialize a specific memory.
+///
+/// Use RegisterMemoryArea() before calling InitMem() in order to have the
+/// memory descriptions available in mem_register_.
+bool VerilatorSimCtrl::InitMem(std::string mem_argument, int &retcode) {
+  MemArea m;
+  if (!ParseMemArg(mem_argument, &m, retcode)) {
+    return false;
+  }
+  // Search for corresponding registered memory based on the name
+  auto registerd = mem_register_.find(m.name);
+  if (registerd != mem_register_.end()) {
+    m.location = registerd->second.location;
+  } else {
+    std::cerr << "Memory location not set for: '" << m.name.data() << "'"
+              << std::endl;
+    PrintMemRegions();
+    retcode = EX_DATAERR;
+    return false;
+  }
+  return MemWrite(m, retcode);
+}
+
+// Parse argument section specific to memory initialization.
+// Must be in the form of: name,file[,type]
+bool VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m,
+                                   int &retcode) {
+  std::array<std::string, 3> args;
+  size_t pos = 0;
+  size_t end_pos = 0;
+  size_t i;
+  for (i = 0; i < 3; ++i) {
+    end_pos = mem_argument.find(",", pos);
+    // Check for possible exit conditions
+    if (pos == end_pos) {
+      std::cerr << "ERROR: empty filed in: " << mem_argument << std::endl;
+      retcode = EX_USAGE;
+      return false;
+    } else if (end_pos == std::string::npos) {
+      args[i] = mem_argument.substr(pos);
+      break;
+    }
+    args[i] = mem_argument.substr(pos, end_pos - pos);
+    pos = end_pos + 1;
+  }
+  // mem_argument is not empty as getopt requires an argument,
+  // but not a valid argument for memory initialization
+  if (i == 0) {
+    // Special keyword for printing memory regions
+    if (mem_argument.compare("list") == 0) {
+      retcode = EX_OK;
+      PrintMemRegions();
+    } else {
+      std::cerr << "ERROR: meminit must be in \"name,file[,type]\""
+                << " got: " << mem_argument << std::endl;
+      retcode = EX_USAGE;
+    }
+    return false;
+  } else if (i == 1) {
+    // Type not set explicitly
+    m->type = ExtractTypeFromName(args[1]);
+  } else {
+    m->type = GetMemInitType(args[2]);
+  }
+  m->name = args[0];
+  m->path = args[1];
+  if (!IsFileReadable(m->path)) {
+    std::cerr << "ERROR: Memory initialization file "
+              << "'" << m->path << "'"
+              << " is not readable." << std::endl;
+    retcode = EX_NOINPUT;
+    return false;
+  }
+  retcode = EX_OK;
+  return true;
+}
+
+bool VerilatorSimCtrl::MemWrite(MemArea &m, int &retcode) {
   svScope scope;
 
-  scope = svGetScopeFromName(mem_location.data());
+  scope = svGetScopeFromName(m.location.data());
   if (!scope) {
-    std::cerr << "ERROR: No Memory found at " << mem_location << std::endl;
-    exit(1);
+    std::cerr << "ERROR: No Memory found at " << m.location.data() << std::endl;
+    retcode = EX_UNAVAILABLE;
+    return false;
   }
   svSetScope(scope);
 
-  bool retval = true;
-
-  switch (ExtractTypeFromName(storage_file)) {
+  switch (m.type) {
+    case kEmpty:  // elf file might have no extension at all
     case kElf:
-      // elf file might have no extension at all
-      retval = ElfFileToBinary(storage_file.data(), (void **)&buf, len_bytes);
-      if (!retval) {
-        break;
-      }
-
-      for (int i = 0; i < len_bytes / 4; ++i) {
-        simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i]);
-      }
-      free(buf);
-      break;
+      return MemWriteElf(m.path, retcode);
     case kVmem:
-      simutil_verilator_memload(storage_file.data());
+      MemWriteVmem(m.path);
       break;
     case kUnknown:
     default:
+      std::cerr << "ERROR: Unknown file type for " << m.location.data()
+                << std::endl;
+      retcode = EX_DATAERR;
       return false;
   }
-  return retval;
+  retcode = EX_OK;
+  return true;
 }
 
-void VerilatorSimCtrl::InitRom(std::string rom) {
-  if (!init_rom_) {
-    return;
-  }
+bool VerilatorSimCtrl::MemWriteElf(const std::string path, int &retcode) {
+  uint8_t *buf;
+  size_t len_bytes;
 
-  if (InitMem(rom, rom_init_file_)) {
-    std::cout << std::endl
-              << "Rom initialized with program " << rom_init_file_
-              << std::endl;
+  if (!ElfFileToBinary(path.data(), (void **)&buf, len_bytes)) {
+    retcode = EX_SOFTWARE;
+    return false;
   }
+  for (int i = 0; i < len_bytes / 4; ++i) {
+    simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i]);
+  }
+  free(buf);
+  retcode = EX_OK;
+  return true;
 }
 
-void VerilatorSimCtrl::InitRam(std::string ram) {
-  if (!init_ram_) {
-    return;
-  }
-
-  if (InitMem(ram, ram_init_file_)) {
-    std::cout << std::endl
-              << "Ram initialized with program " << ram_init_file_
-              << std::endl;
-  }
-}
-
-void VerilatorSimCtrl::InitFlash(std::string flash) {
-  if (!init_flash_) {
-    return;
-  }
-
-  if (InitMem(flash, flash_init_file_)) {
-    std::cout << std::endl
-              << "Flash initialized with program " << flash_init_file_
-              << std::endl;
-  }
+void VerilatorSimCtrl::MemWriteVmem(const std::string path) {
+  simutil_verilator_memload(path.data());
 }
 
 bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
   const struct option long_options[] = {
-      {"rominit", required_argument, nullptr, 'r'},
-      {"raminit", required_argument, nullptr, 'm'},
-      {"flashinit", required_argument, nullptr, 'f'},
+      {"meminit", required_argument, nullptr, 'm'},
       {"term-after-cycles", required_argument, nullptr, 'c'},
       {"trace", no_argument, nullptr, 't'},
       {"help", no_argument, nullptr, 'h'},
       {nullptr, no_argument, nullptr, 0}};
 
+  retcode = EX_OK;
   while (1) {
-    int c = getopt_long(argc, argv, ":r:m:f:c:th", long_options, nullptr);
+    int c = getopt_long(argc, argv, ":m:c:th", long_options, nullptr);
     if (c == -1) {
       break;
     }
@@ -280,33 +363,8 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
     switch (c) {
       case 0:
         break;
-      case 'r':
-        rom_init_file_ = optarg;
-        init_rom_ = true;
-        if (!IsFileReadable(rom_init_file_)) {
-          std::cerr << "ERROR: ROM initialization file "
-                    << "'" << rom_init_file_ << "'"
-                    << " is not readable." << std::endl;
-          return false;
-        }
-        break;
       case 'm':
-        ram_init_file_ = optarg;
-        init_ram_ = true;
-        if (!IsFileReadable(ram_init_file_)) {
-          std::cerr << "ERROR: Memory initialization file "
-                    << "'" << ram_init_file_ << "'"
-                    << " is not readable." << std::endl;
-          return false;
-        }
-        break;
-      case 'f':
-        flash_init_file_ = optarg;
-        init_flash_ = true;
-        if (!IsFileReadable(flash_init_file_)) {
-          std::cerr << "ERROR: FLASH initialization file "
-                    << "'" << flash_init_file_ << "'"
-                    << " is not readable." << std::endl;
+        if (!InitMem(optarg, retcode)) {
           return false;
         }
         break;
@@ -314,6 +372,7 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
         if (!tracing_possible_) {
           std::cerr << "ERROR: Tracing has not been enabled at compile time."
                     << std::endl;
+          retcode = EX_USAGE;
           return false;
         }
         TraceOn();
@@ -327,6 +386,7 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
       case ':':  // missing argument
         std::cerr << "ERROR: Missing argument." << std::endl;
         PrintHelp();
+        retcode = EX_USAGE;
         return false;
       case '?':
       default:;
