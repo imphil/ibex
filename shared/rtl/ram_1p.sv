@@ -54,6 +54,7 @@ module ram_1p #(
     // Task for loading 'mem' with SystemVerilog system task readmemh
     export "DPI-C" task simutil_verilator_memload;
     // Function for setting a specific 32 bit element in 'mem'
+    // Returns 0 for success, 1 for error
     export "DPI-C" function simutil_verilator_set_mem;
 
     task simutil_verilator_memload;
@@ -62,10 +63,13 @@ module ram_1p #(
     endtask
 
     // TODO: Allow 'val' to have other widths than 32 bit
-    function void simutil_verilator_set_mem(input int index,
+    function int simutil_verilator_set_mem(input int index,
       input logic[31:0] val);
       if (index < Depth) begin
         mem[index] = val;
+        return 0;
+      end else begin
+        return 1;
       end
     endfunction
   `endif

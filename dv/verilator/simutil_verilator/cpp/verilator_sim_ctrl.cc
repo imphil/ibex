@@ -62,7 +62,7 @@ double sc_time_stamp() {
 // DPI Exports
 extern "C" {
 extern void simutil_verilator_memload(const char *file);
-extern void simutil_verilator_set_mem(int index, const svLogicVecVal *val);
+extern int simutil_verilator_set_mem(int index, const svLogicVecVal *val);
 }
 
 VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel *top, CData &sig_clk,
@@ -331,7 +331,10 @@ bool VerilatorSimCtrl::MemWriteElf(const std::string path, int &retcode) {
     return false;
   }
   for (int i = 0; i < len_bytes / 4; ++i) {
-    simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i]);
+    if (simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i])) {
+      retcode = EX_IOERR;
+      return false;
+    }
   }
   free(buf);
   retcode = EX_OK;
