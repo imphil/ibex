@@ -236,7 +236,12 @@ bool VerilatorSimCtrl::InitMem(std::string mem_argument, int &retcode) {
     retcode = EX_DATAERR;
     return false;
   }
-  return MemWrite(m, retcode);
+  if (!MemWrite(m, retcode)) {
+    std::cerr << "ERROR: Writing to memory failed." << std::endl;
+    return false;
+  }
+  retcode = EX_OK;
+  return true;
 }
 
 // Parse argument section specific to memory initialization.
@@ -307,7 +312,12 @@ bool VerilatorSimCtrl::MemWrite(MemArea &m, int &retcode) {
   switch (m.type) {
     case kEmpty:  // elf file might have no extension at all
     case kElf:
-      return MemWriteElf(m.path, retcode);
+      if (!MemWriteElf(m.path, retcode)) {
+        std::cerr << "ERROR: Writing ELF file to memory \"" << m.name.data()
+                  << "\" (" << m.location.data() << ") failed." << std::endl;
+        return false;
+      }
+      break;
     case kVmem:
       MemWriteVmem(m.path);
       break;
@@ -327,11 +337,14 @@ bool VerilatorSimCtrl::MemWriteElf(const std::string path, int &retcode) {
   size_t len_bytes;
 
   if (!ElfFileToBinary(path.data(), (void **)&buf, len_bytes)) {
+    std::cerr << "ERROR: Could not load: " << path.data() << std::endl;
     retcode = EX_SOFTWARE;
     return false;
   }
   for (int i = 0; i < len_bytes / 4; ++i) {
     if (simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i])) {
+      std::cerr << "ERROR: Could not set memory byte: " << i*4
+                << "/" << len_bytes << "" << std::endl;
       retcode = EX_IOERR;
       return false;
     }
@@ -368,6 +381,11 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
         break;
       case 'm':
         if (!InitMem(optarg, retcode)) {
+          // For listing the memory (-m list) we need to stop execution but
+          // this should not be printed as an error
+          if (retcode != EX_OK) {
+            std::cerr << "ERROR: Setting memory failed." << std::endl;
+          }
           return false;
         }
         break;
