@@ -162,7 +162,10 @@ void VerilatorSimCtrl::PrintHelp() const {
     std::cout << "-t|--trace                    Write a trace file from the"
                  " start\n";
   }
-  std::cout << "-m|--meminit=name,file[,type] Initialize memory NAME with FILE"
+  std::cout << "-r|--rominit=FILE      Initialize the ROM with FILE (elf/vmem)\n"
+               "-m|--raminit=FILE      Initialize the RAM with FILE (elf/vmem)\n"
+               "-f|--flashinit=FILE    Initialize the FLASH with FILE (elf/vmem)\n"
+               "-l|--meminit=name,file[,type] Initialize memory NAME with FILE"
                " [of TYPE]\n"
                "                              TYPE is either 'elf' or 'vmem'\n"
                "                              Use \"list\" for NAME without "
@@ -360,7 +363,10 @@ void VerilatorSimCtrl::MemWriteVmem(const std::string path) {
 
 bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
   const struct option long_options[] = {
-      {"meminit", required_argument, nullptr, 'm'},
+      {"rominit", required_argument, nullptr, 'r'},
+      {"raminit", required_argument, nullptr, 'm'},
+      {"flashinit", required_argument, nullptr, 'f'},
+      {"meminit", required_argument, nullptr, 'l'},
       {"term-after-cycles", required_argument, nullptr, 'c'},
       {"trace", no_argument, nullptr, 't'},
       {"help", no_argument, nullptr, 'h'},
@@ -368,20 +374,51 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
 
   retcode = EX_OK;
   while (1) {
-    int c = getopt_long(argc, argv, ":m:c:th", long_options, nullptr);
+    int c = getopt_long(argc, argv, ":r:f:m:l:c:th", long_options, nullptr);
     if (c == -1) {
       break;
     }
 
     // Disable error reporting by getopt
     opterr = 0;
+    std::string mem_opt;
 
     switch (c) {
       case 0:
         break;
+      case 'r':
+        mem_opt.assign("rom,");
+        mem_opt.append(optarg);
+        if (!InitMem(mem_opt, retcode)) {
+          if (retcode != EX_OK) {
+            std::cerr << "ERROR: Setting memory failed." << std::endl;
+          }
+          return false;
+        }
+        break;
       case 'm':
+        mem_opt.assign("ram,");
+        mem_opt.append(optarg);
+        if (!InitMem(mem_opt, retcode)) {
+          if (retcode != EX_OK) {
+            std::cerr << "ERROR: Setting memory failed." << std::endl;
+          }
+          return false;
+        }
+        break;
+      case 'f':
+        mem_opt.assign("flash,");
+        mem_opt.append(optarg);
+        if (!InitMem(mem_opt, retcode)) {
+          if (retcode != EX_OK) {
+            std::cerr << "ERROR: Setting memory failed." << std::endl;
+          }
+          return false;
+        }
+        break;
+      case 'l':
         if (!InitMem(optarg, retcode)) {
-          // For listing the memory (-m list) we need to stop execution but
+          // For listing the memory (-l list) we need to stop execution but
           // this should not be printed as an error
           if (retcode != EX_OK) {
             std::cerr << "ERROR: Setting memory failed." << std::endl;
