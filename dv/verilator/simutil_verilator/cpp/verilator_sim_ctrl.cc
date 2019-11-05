@@ -657,15 +657,6 @@ bool VerilatorSimCtrl::ElfFileToBinary(std::string file_name, void **data,
     buf_data.data = (uint8_t *)malloc(elf_data->d_size);
     memcpy(buf_data.data, ((uint8_t *)elf_data->d_buf), buf_data.length);
     buffers.push_back(buf_data);
-
-    size_t init_zeros = phdr.p_memsz - phdr.p_filesz;
-    if (init_zeros > 0) {
-      BufferDesc buf_zeros;
-      buf_zeros.length = init_zeros;
-      len_bytes += buf_zeros.length;
-      buf_zeros.data = (uint8_t *)calloc(1, buf_zeros.length);
-      buffers.push_back(buf_zeros);
-    }
   }
 
   // Put the collected data into a continuous buffer
