@@ -53,7 +53,7 @@ class VerilatorSimCtrl {
    * This function performs the followind tasks:
    * 1. Sets up a signal handler to enable tracing to be turned on/off during
    *    a run by sending SIGUSR1 to the process
-   * 2. Parses a C-style set of command line arguments (see ParseCommandArgs)
+   * 2. Parses a C-style set of command line arguments (see ParseCommandArgs())
    *
    * @return return code (0 = success)
    */
