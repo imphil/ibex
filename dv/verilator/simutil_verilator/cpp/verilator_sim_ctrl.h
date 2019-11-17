@@ -81,17 +81,6 @@ class VerilatorSimCtrl {
   void PrintHelp() const;
 
   /**
-   * Parse command line arguments
-   *
-   * This removes all recognized command-line arguments from argc/argv.
-   *
-   * The return value of this method indicates if the program should exit with
-   * retcode: if this method returns true, do *not* exit; if it returns *false*,
-   * do exit.
-   */
-  bool ParseCommandArgs(int argc, char **argv, int &retcode);
-
-  /**
    * Run the main loop of the simulation
    *
    * This function blocks until the simulation finishes.
@@ -205,6 +194,16 @@ class VerilatorSimCtrl {
   int term_after_cycles_;
   SimCtrlCallBack callback_;
 
+  /**
+   * Parse command line arguments
+   *
+   * This removes all recognized command-line arguments from argc/argv.
+   *
+   * The return value of this method indicates if the program should exit with
+   * retcode: if this method returns true, do *not* exit; if it returns *false*,
+   * do exit.
+   */
+  bool ParseCommandArgs(int argc, char **argv, int &retcode);
   unsigned int GetExecutionTimeMs();
   void SetReset();
   void UnsetReset();
