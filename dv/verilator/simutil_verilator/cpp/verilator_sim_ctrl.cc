@@ -85,14 +85,10 @@ VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel *top, CData &sig_clk,
       callback_(nullptr) {}
 
 int VerilatorSimCtrl::SetupSimulation(int argc, char **argv) {
-  int retval;
   // Setup the signal handler for this instance
   RegisterSignalHandler();
   // Parse the command line argumanets
-  if (!ParseCommandArgs(argc,argv,retval)) {
-    return retval;
-  }
-  return 0;
+  return ParseCommandArgs(argc,argv);
 }
 
 void VerilatorSimCtrl::RunSimulation() {
@@ -226,10 +222,12 @@ void VerilatorSimCtrl::PrintMemRegions() {
 ///
 /// Use RegisterMemoryArea() before calling InitMem() in order to have the
 /// memory descriptions available in mem_register_.
-bool VerilatorSimCtrl::InitMem(std::string mem_argument, int &retcode) {
+int VerilatorSimCtrl::InitMem(std::string mem_argument) {
   MemArea m;
-  if (!ParseMemArg(mem_argument, &m, retcode)) {
-    return false;
+  int ret;
+  ret = ParseMemArg(mem_argument, &m);
+  if (ret) {
+    return ret;
   }
   // Search for corresponding registered memory based on the name
   auto registerd = mem_register_.find(m.name);
@@ -239,32 +237,30 @@ bool VerilatorSimCtrl::InitMem(std::string mem_argument, int &retcode) {
     std::cerr << "Memory location not set for: '" << m.name.data() << "'"
               << std::endl;
     PrintMemRegions();
-    retcode = EX_DATAERR;
-    return false;
+    return EX_DATAERR;
   }
-  if (!MemWrite(m, retcode)) {
+  ret = MemWrite(m);
+  if (ret) {
     std::cerr << "ERROR: Writing to memory failed." << std::endl;
-    return false;
+    return ret;
   }
-  retcode = EX_OK;
-  return true;
+  return EX_OK;
 }
 
 // Parse argument section specific to memory initialization.
 // Must be in the form of: name,file[,type]
-bool VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m,
-                                   int &retcode) {
+int VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m) {
   std::array<std::string, 3> args;
   size_t pos = 0;
   size_t end_pos = 0;
   size_t i;
+  int retcode;
   for (i = 0; i < 3; ++i) {
     end_pos = mem_argument.find(",", pos);
     // Check for possible exit conditions
     if (pos == end_pos) {
       std::cerr << "ERROR: empty filed in: " << mem_argument << std::endl;
-      retcode = EX_USAGE;
-      return false;
+      return EX_USAGE;
     } else if (end_pos == std::string::npos) {
       args[i] = mem_argument.substr(pos);
       break;
@@ -277,14 +273,14 @@ bool VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m,
   if (i == 0) {
     // Special keyword for printing memory regions
     if (mem_argument.compare("list") == 0) {
-      retcode = EX_OK;
       PrintMemRegions();
+      retcode = kMemList;
     } else {
       std::cerr << "ERROR: meminit must be in \"name,file[,type]\""
                 << " got: " << mem_argument << std::endl;
       retcode = EX_USAGE;
     }
-    return false;
+    return retcode;
   } else if (i == 1) {
     // Type not set explicitly
     m->type = ExtractTypeFromName(args[1]);
@@ -297,31 +293,30 @@ bool VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m,
     std::cerr << "ERROR: Memory initialization file "
               << "'" << m->path << "'"
               << " is not readable." << std::endl;
-    retcode = EX_NOINPUT;
-    return false;
+    return EX_NOINPUT;
   }
-  retcode = EX_OK;
-  return true;
+  return EX_OK;
 }
 
-bool VerilatorSimCtrl::MemWrite(MemArea &m, int &retcode) {
+int VerilatorSimCtrl::MemWrite(MemArea &m) {
   svScope scope;
+  int ret;
 
   scope = svGetScopeFromName(m.location.data());
   if (!scope) {
     std::cerr << "ERROR: No Memory found at " << m.location.data() << std::endl;
-    retcode = EX_UNAVAILABLE;
-    return false;
+    return EX_UNAVAILABLE;
   }
   svSetScope(scope);
 
   switch (m.type) {
     case kEmpty:  // elf file might have no extension at all
     case kElf:
-      if (!MemWriteElf(m.path, retcode)) {
+      ret = MemWriteElf(m.path);
+      if (ret) {
         std::cerr << "ERROR: Writing ELF file to memory \"" << m.name.data()
                   << "\" (" << m.location.data() << ") failed." << std::endl;
-        return false;
+        return ret;
       }
       break;
     case kVmem:
@@ -331,40 +326,35 @@ bool VerilatorSimCtrl::MemWrite(MemArea &m, int &retcode) {
     default:
       std::cerr << "ERROR: Unknown file type for " << m.location.data()
                 << std::endl;
-      retcode = EX_DATAERR;
-      return false;
+      return EX_DATAERR;
   }
-  retcode = EX_OK;
-  return true;
+  return EX_OK;
 }
 
-bool VerilatorSimCtrl::MemWriteElf(const std::string path, int &retcode) {
+int VerilatorSimCtrl::MemWriteElf(const std::string path) {
   uint8_t *buf;
   size_t len_bytes;
 
   if (!ElfFileToBinary(path.data(), (void **)&buf, len_bytes)) {
     std::cerr << "ERROR: Could not load: " << path.data() << std::endl;
-    retcode = EX_SOFTWARE;
-    return false;
+    return EX_SOFTWARE;
   }
   for (int i = 0; i < len_bytes / 4; ++i) {
     if (simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i])) {
       std::cerr << "ERROR: Could not set memory byte: " << i*4
                 << "/" << len_bytes << "" << std::endl;
-      retcode = EX_IOERR;
-      return false;
+      return EX_IOERR;
     }
   }
   free(buf);
-  retcode = EX_OK;
-  return true;
+  return EX_OK;
 }
 
 void VerilatorSimCtrl::MemWriteVmem(const std::string path) {
   simutil_verilator_memload(path.data());
 }
 
-bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
+int VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv) {
   const struct option long_options[] = {
       {"rominit", required_argument, nullptr, 'r'},
       {"raminit", required_argument, nullptr, 'm'},
@@ -375,7 +365,7 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
       {"help", no_argument, nullptr, 'h'},
       {nullptr, no_argument, nullptr, 0}};
 
-  retcode = EX_OK;
+  int retcode;
   while (1) {
     int c = getopt_long(argc, argv, ":r:f:m:l:c:th", long_options, nullptr);
     if (c == -1) {
@@ -392,63 +382,58 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
       case 'r':
         mem_opt.assign("rom,");
         mem_opt.append(optarg);
-        if (!InitMem(mem_opt, retcode)) {
-          if (retcode != EX_OK) {
-            std::cerr << "ERROR: Setting memory failed." << std::endl;
-          }
-          return false;
+        retcode = InitMem(mem_opt);
+        if (retcode) {
+          std::cerr << "ERROR: Setting memory failed." << std::endl;
+          return retcode;
         }
         break;
       case 'm':
         mem_opt.assign("ram,");
         mem_opt.append(optarg);
-        if (!InitMem(mem_opt, retcode)) {
-          if (retcode != EX_OK) {
-            std::cerr << "ERROR: Setting memory failed." << std::endl;
-          }
-          return false;
+        retcode = InitMem(mem_opt);
+        if (retcode) {
+          std::cerr << "ERROR: Setting memory failed." << std::endl;
+          return retcode;
         }
         break;
       case 'f':
         mem_opt.assign("flash,");
         mem_opt.append(optarg);
-        if (!InitMem(mem_opt, retcode)) {
-          if (retcode != EX_OK) {
-            std::cerr << "ERROR: Setting memory failed." << std::endl;
-          }
-          return false;
+        retcode = InitMem(mem_opt);
+        if (retcode) {
+          std::cerr << "ERROR: Setting memory failed." << std::endl;
+          return retcode;
         }
         break;
       case 'l':
-        if (!InitMem(optarg, retcode)) {
+        retcode = InitMem(optarg);
+        if (retcode) {
           // For listing the memory (-l list) we need to stop execution but
           // this should not be printed as an error
-          if (retcode != EX_OK) {
+          if (retcode != kMemList) {
             std::cerr << "ERROR: Setting memory failed." << std::endl;
           }
-          return false;
+          return retcode;
         }
         break;
       case 't':
         if (!tracing_possible_) {
           std::cerr << "ERROR: Tracing has not been enabled at compile time."
                     << std::endl;
-          retcode = EX_USAGE;
-          return false;
+          return EX_USAGE;
         }
         TraceOn();
         break;
       case 'c':
         term_after_cycles_ = atoi(optarg);
         break;
-      case 'h':
-        PrintHelp();
-        return false;
       case ':':  // missing argument
         std::cerr << "ERROR: Missing argument." << std::endl;
+        // Intended fall through
+      case 'h':
         PrintHelp();
-        retcode = EX_USAGE;
-        return false;
+        return EX_USAGE;
       case '?':
       default:;
         // Ignore unrecognized options since they might be consumed by
@@ -457,7 +442,7 @@ bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, int &retcode) {
   }
 
   Verilated::commandArgs(argc, argv);
-  return true;
+  return EX_OK;
 }
 
 void VerilatorSimCtrl::Trace() {

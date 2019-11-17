@@ -28,8 +28,12 @@ int main(int argc, char **argv) {
 
   retcode = simctrl->SetupSimulation(argc, argv);
 
-  if (retcode != 0)
+  if (retcode == kMemList) {
+    // Error signal for listing memories, abort normal operation as successful
+    return 0;
+  } else if (retcode != 0) {
     return retcode;
+  }
 
   std::cout << "Simulation of Ibex" << std::endl
             << "==================" << std::endl

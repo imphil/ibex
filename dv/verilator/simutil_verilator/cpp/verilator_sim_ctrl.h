@@ -11,6 +11,7 @@
 #include <string>
 #include <functional>
 #include <map>
+#include <sysexits.h>
 
 #include "verilated_toplevel.h"
 
@@ -28,6 +29,10 @@ enum MemInitType {
   kEmpty,
   kElf,
   kVmem,
+};
+
+enum SimError {
+  kMemList = EX__MAX + 1,
 };
 
 struct MemArea {
@@ -203,7 +208,7 @@ class VerilatorSimCtrl {
    * retcode: if this method returns true, do *not* exit; if it returns *false*,
    * do exit.
    */
-  bool ParseCommandArgs(int argc, char **argv, int &retcode);
+  int ParseCommandArgs(int argc, char **argv);
   unsigned int GetExecutionTimeMs();
   void SetReset();
   void UnsetReset();
@@ -211,12 +216,12 @@ class VerilatorSimCtrl {
   bool FileSize(std::string filepath, int &size_byte);
   void Trace();
   bool ElfFileToBinary(std::string file_name, void **data, size_t &len_bytes);
-  bool InitMem(std::string mem_argument, int &retcode);
+  int InitMem(std::string mem_argument);
   MemInitType ExtractTypeFromName(std::string filename);
   MemInitType GetMemInitType(std::string name);
-  bool ParseMemArg(std::string mem_argument, MemArea *m, int &retcode);
-  bool MemWrite(MemArea &m, int &retcode);
-  bool MemWriteElf(const std::string path, int &retcode);
+  int ParseMemArg(std::string mem_argument, MemArea *m);
+  int MemWrite(MemArea &m);
+  int MemWriteElf(const std::string path);
   void MemWriteVmem(const std::string path);
   void PrintMemRegions();
 };

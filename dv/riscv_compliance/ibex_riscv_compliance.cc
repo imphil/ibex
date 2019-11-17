@@ -21,7 +21,11 @@ int main(int argc, char **argv) {
   // Setup simctrl
   simctrl->RegisterMemoryArea("ram", "TOP.ibex_riscv_compliance.u_ram");
   retcode = simctrl->SetupSimulation(argc, argv);
-  if (retcode != 0) {
+  if (retcode == kMemList) {
+    // Error signal for listing memories, abort normal operation as successful
+    retcode = 0;
+    goto free_return;
+  } else if (retcode != 0) {
     goto free_return;
   }
 
