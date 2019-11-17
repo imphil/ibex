@@ -159,23 +159,26 @@ void VerilatorSimCtrl::PrintHelp() const {
             << "\n"
                "\n";
   if (tracing_possible_) {
-    std::cout << "-t|--trace                    Write a trace file from the"
-                 " start\n";
+    std::cout << "-t|--trace\n"
+                 "  Write a trace file from the start\n\n";
   }
-  std::cout << "-r|--rominit=FILE      Initialize the ROM with FILE (elf/vmem)\n"
-               "-m|--raminit=FILE      Initialize the RAM with FILE (elf/vmem)\n"
-               "-f|--flashinit=FILE    Initialize the FLASH with FILE (elf/vmem)\n"
-               "-l|--meminit=name,file[,type] Initialize memory NAME with FILE"
-               " [of TYPE]\n"
-               "                              TYPE is either 'elf' or 'vmem'\n"
-               "                              Use \"list\" for NAME without "
-               "FILE or TYPE to print registered memory regions\n"
-               "-c|--term-after-cycles=N  Terminate simulation after N cycles\n"
-               "-h|--help                     Show help\n"
-               "\n"
+  std::cout << "-r|--rominit=FILE\n"
+               "  Initialize the ROM with FILE (elf/vmem)\n\n"
+               "-m|--raminit=FILE\n"
+               "  Initialize the RAM with FILE (elf/vmem)\n\n"
+               "-f|--flashinit=FILE\n"
+               "  Initialize the FLASH with FILE (elf/vmem)\n\n"
+               "-l|--meminit=NAME,FILE[,TYPE]\n"
+               "  Initialize memory region NAME with FILE [of TYPE]\n"
+               "  TYPE is either 'elf' or 'vmem'\n\n"
+               "-l list|--meminit=list\n"
+               "  Print registerd memory regions\n\n"
+               "-c|--term-after-cycles=N\n"
+               "  Terminate simulation after N cycles\n\n"
+               "-h|--help\n"
+               "  Show help\n\n"
                "All further arguments are passed to the design and can be used "
-               "in the \n"
-               "design, e.g. by DPI modules.\n";
+               "in the design, e.g. by DPI modules.\n";
 }
 
 bool VerilatorSimCtrl::RegisterMemoryArea(const std::string name,
