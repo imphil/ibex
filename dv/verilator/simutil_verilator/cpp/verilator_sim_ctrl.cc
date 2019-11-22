@@ -8,24 +8,26 @@
 #include <gelf.h>
 #include <getopt.h>
 #include <libelf.h>
-#include <map>
 #include <signal.h>
 #include <sys/stat.h>
-#include <sysexits.h>
-#include <utility>
 #include <unistd.h>
 #include <vltstd/svdpi.h>
-
 #include <iostream>
+#include <map>
+#include <utility>
 
 // This is defined by Verilator and passed through the command line
 #ifndef VM_TRACE
 #define VM_TRACE 0
 #endif
 
-// Static pointer to a single simctrl instance
-// used by SignalHandler
-static VerilatorSimCtrl *simctrl;
+struct BufferDesc {
+  uint8_t *data;
+  size_t length;
+};
+
+// Static pointer to a single simctrl instance used by SignalHandler
+static VerilatorSimCtrl *simctrl = nullptr;
 
 static void SignalHandler(int sig) {
   if (!simctrl) {
@@ -65,7 +67,7 @@ extern void simutil_verilator_memload(const char *file);
 extern int simutil_verilator_set_mem(int index, const svLogicVecVal *val);
 }
 
-VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel *top, CData &sig_clk,
+VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel &top, CData &sig_clk,
                                    CData &sig_rst, VerilatorSimCtrlFlags flags)
     : top_(top),
       sig_clk_(sig_clk),
@@ -84,11 +86,23 @@ VerilatorSimCtrl::VerilatorSimCtrl(VerilatedToplevel *top, CData &sig_clk,
       term_after_cycles_(0),
       callback_(nullptr) {}
 
-int VerilatorSimCtrl::SetupSimulation(int argc, char **argv) {
-  // Setup the signal handler for this instance
+int VerilatorSimCtrl::Exec(int argc, char **argv) {
   RegisterSignalHandler();
-  // Parse the command line argumanets
-  return ParseCommandArgs(argc,argv);
+
+  bool exit_app = false;
+  if (!ParseCommandArgs(argc, argv, exit_app)) {
+    return 1;
+  }
+  if (exit_app) {
+    return 0;
+  }
+
+  RunSimulation();
+
+  if (!WasSimulationSuccessful()) {
+    return 1;
+  }
+  return 0;
 }
 
 void VerilatorSimCtrl::RunSimulation() {
@@ -97,7 +111,6 @@ void VerilatorSimCtrl::RunSimulation() {
     std::cout << "Tracing can be toggled by sending SIGUSR1 to this process:"
               << std::endl
               << "$ kill -USR1 " << getpid() << std::endl;
-
   }
   // Run the simulation
   Run();
@@ -107,7 +120,7 @@ void VerilatorSimCtrl::RunSimulation() {
   if (TracingEverEnabled()) {
     std::cout << std::endl
               << "You can view the simulation traces by calling" << std::endl
-              << "$ gtkwave " << GetSimulationFileName() << std::endl;
+              << "$ gtkwave " << GetTraceFileName() << std::endl;
   }
 }
 
@@ -151,7 +164,7 @@ bool VerilatorSimCtrl::TraceOff() {
 }
 
 void VerilatorSimCtrl::PrintHelp() const {
-  std::cout << "Execute a simulation model for " << top_->name()
+  std::cout << "Execute a simulation model for " << top_.name()
             << "\n"
                "\n";
   if (tracing_possible_) {
@@ -168,7 +181,7 @@ void VerilatorSimCtrl::PrintHelp() const {
                "  Initialize memory region NAME with FILE [of TYPE]\n"
                "  TYPE is either 'elf' or 'vmem'\n\n"
                "-l list|--meminit=list\n"
-               "  Print registerd memory regions\n\n"
+               "  Print registered memory regions\n\n"
                "-c|--term-after-cycles=N\n"
                "  Terminate simulation after N cycles\n\n"
                "-h|--help\n"
@@ -183,85 +196,59 @@ bool VerilatorSimCtrl::RegisterMemoryArea(const std::string name,
 
   auto ret = mem_register_.emplace(name, mem);
   if (ret.second == false) {
-      std::cerr << "ERROR: Can not register \"" << name << "\" at: \""
-                << location << "\" (Previously defined at: \""
-                << ret.first->second.location << "\")" << std::endl;
-      return false;
+    std::cerr << "ERROR: Can not register \"" << name << "\" at: \"" << location
+              << "\" (Previously defined at: \"" << ret.first->second.location
+              << "\")" << std::endl;
+    return false;
   }
   return true;
 }
 
-MemInitType VerilatorSimCtrl::GetMemInitType(std::string name) {
+MemImageType VerilatorSimCtrl::GetMemImageTypeByName(const std::string name) {
   if (name.compare("elf") == 0) {
-    return kElf;
-  } else if (name.compare("vmem") == 0) {
-    return kVmem;
+    return kMemImageElf;
   }
-  return kUnknown;
+  if (name.compare("vmem") == 0) {
+    return kMemImageVmem;
+  }
+  return kMemImageUnknown;
 }
 
-MemInitType VerilatorSimCtrl::ExtractTypeFromName(std::string filename) {
-  size_t ext_pos = filename.find_last_of(".");
-  std::string ext = filename.substr(ext_pos + 1);
+MemImageType VerilatorSimCtrl::DetectMemImageType(const std::string filepath) {
+  size_t ext_pos = filepath.find_last_of(".");
+  std::string ext = filepath.substr(ext_pos + 1);
 
   if (ext_pos == std::string::npos) {
-    return kEmpty;
+    // Assume ELF files if no file extension is given.
+    // TODO: Make this more robust by actually checking the file contents.
+    return kMemImageElf;
   }
-  return GetMemInitType(ext);
+  return GetMemImageTypeByName(ext);
 }
 
-void VerilatorSimCtrl::PrintMemRegions() {
-  std::cout << "Registerd memory regions:" << std::endl;
+void VerilatorSimCtrl::PrintMemRegions() const {
+  std::cout << "Registered memory regions:" << std::endl;
   for (const auto &m : mem_register_) {
     std::cout << "\t'" << m.second.name << "' at location: '"
               << m.second.location << "'" << std::endl;
   }
 }
 
-/// Initialize a specific memory.
-///
-/// Use RegisterMemoryArea() before calling InitMem() in order to have the
-/// memory descriptions available in mem_register_.
-int VerilatorSimCtrl::InitMem(std::string mem_argument) {
-  MemArea m;
-  int ret;
-  ret = ParseMemArg(mem_argument, &m);
-  if (ret) {
-    return ret;
-  }
-  // Search for corresponding registered memory based on the name
-  auto registerd = mem_register_.find(m.name);
-  if (registerd != mem_register_.end()) {
-    m.location = registerd->second.location;
-  } else {
-    std::cerr << "Memory location not set for: '" << m.name.data() << "'"
-              << std::endl;
-    PrintMemRegions();
-    return EX_DATAERR;
-  }
-  ret = MemWrite(m);
-  if (ret) {
-    std::cerr << "ERROR: Writing to memory failed." << std::endl;
-    return ret;
-  }
-  return EX_OK;
-}
-
-// Parse argument section specific to memory initialization.
-// Must be in the form of: name,file[,type]
-int VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m) {
+bool VerilatorSimCtrl::ParseMemArg(std::string mem_argument, std::string &name,
+                                   std::string &filepath, MemImageType &type) {
   std::array<std::string, 3> args;
   size_t pos = 0;
   size_t end_pos = 0;
   size_t i;
-  int retcode;
+
   for (i = 0; i < 3; ++i) {
     end_pos = mem_argument.find(",", pos);
     // Check for possible exit conditions
     if (pos == end_pos) {
-      std::cerr << "ERROR: empty filed in: " << mem_argument << std::endl;
-      return EX_USAGE;
-    } else if (end_pos == std::string::npos) {
+      std::cerr << "ERROR: empty field in: " << mem_argument << std::endl;
+      return false;
+    }
+    if (end_pos == std::string::npos) {
       args[i] = mem_argument.substr(pos);
       break;
     }
@@ -271,90 +258,129 @@ int VerilatorSimCtrl::ParseMemArg(std::string mem_argument, MemArea *m) {
   // mem_argument is not empty as getopt requires an argument,
   // but not a valid argument for memory initialization
   if (i == 0) {
-    // Special keyword for printing memory regions
-    if (mem_argument.compare("list") == 0) {
-      PrintMemRegions();
-      retcode = kMemList;
-    } else {
-      std::cerr << "ERROR: meminit must be in \"name,file[,type]\""
-                << " got: " << mem_argument << std::endl;
-      retcode = EX_USAGE;
-    }
-    return retcode;
-  } else if (i == 1) {
+    std::cerr << "ERROR: meminit must be in \"name,file[,type]\""
+              << " got: " << mem_argument << std::endl;
+    return false;
+  }
+
+  name = args[0];
+  filepath = args[1];
+
+  if (i == 1) {
     // Type not set explicitly
-    m->type = ExtractTypeFromName(args[1]);
+    type = DetectMemImageType(filepath);
   } else {
-    m->type = GetMemInitType(args[2]);
+    type = GetMemImageTypeByName(args[2]);
   }
-  m->name = args[0];
-  m->path = args[1];
-  if (!IsFileReadable(m->path)) {
-    std::cerr << "ERROR: Memory initialization file "
-              << "'" << m->path << "'"
-              << " is not readable." << std::endl;
-    return EX_NOINPUT;
-  }
-  return EX_OK;
+
+  return true;
 }
 
-int VerilatorSimCtrl::MemWrite(MemArea &m) {
-  svScope scope;
-  int ret;
-
-  scope = svGetScopeFromName(m.location.data());
-  if (!scope) {
-    std::cerr << "ERROR: No Memory found at " << m.location.data() << std::endl;
-    return EX_UNAVAILABLE;
+bool VerilatorSimCtrl::MemWrite(const std::string &name,
+                                const std::string &filepath) {
+  MemImageType type = DetectMemImageType(filepath);
+  if (type == kMemImageUnknown) {
+    std::cerr << "ERROR: Unable to detect file type of " << filepath
+              << std::endl;
   }
-  svSetScope(scope);
+  return MemWrite(name, filepath, type);
+}
 
-  switch (m.type) {
-    case kEmpty:  // elf file might have no extension at all
-    case kElf:
-      ret = MemWriteElf(m.path);
-      if (ret) {
-        std::cerr << "ERROR: Writing ELF file to memory \"" << m.name.data()
-                  << "\" (" << m.location.data() << ") failed." << std::endl;
-        return ret;
+bool VerilatorSimCtrl::MemWrite(const std::string &name,
+                                const std::string &filepath,
+                                MemImageType type) {
+  // Search for corresponding registered memory based on the name
+  auto it = mem_register_.find(name);
+  if (it == mem_register_.end()) {
+    std::cerr << "Memory location not set for: '" << name << "'" << std::endl;
+    PrintMemRegions();
+    return false;
+  }
+
+  return MemWrite(it->second, filepath, type);
+}
+
+bool VerilatorSimCtrl::MemWrite(const MemArea &m, const std::string &filepath,
+                                MemImageType type) {
+  if (!IsFileReadable(filepath)) {
+    std::cerr << "ERROR: Memory initialization file "
+              << "'" << filepath << "'"
+              << " is not readable." << std::endl;
+    return false;
+  }
+
+  svScope scope = svGetScopeFromName(m.location.data());
+  if (!scope) {
+    std::cerr << "ERROR: No memory found at " << m.location << std::endl;
+    return false;
+  }
+
+  switch (type) {
+    case kMemImageElf:
+      if (!WriteElfToMem(scope, filepath)) {
+        std::cerr << "ERROR: Writing ELF file to memory \"" << m.name << "\" ("
+                  << m.location << ") failed." << std::endl;
+        return false;
       }
       break;
-    case kVmem:
-      MemWriteVmem(m.path);
+    case kMemImageVmem:
+      if (!WriteVmemToMem(scope, filepath)) {
+        std::cerr << "ERROR: Writing VMEM file to memory \"" << m.name << "\" ("
+                  << m.location << ") failed." << std::endl;
+        return false;
+      }
       break;
-    case kUnknown:
+    case kMemImageUnknown:
     default:
-      std::cerr << "ERROR: Unknown file type for " << m.location.data()
-                << std::endl;
-      return EX_DATAERR;
+      std::cerr << "ERROR: Unknown file type for " << m.name << std::endl;
+      return false;
   }
-  return EX_OK;
+  return true;
 }
 
-int VerilatorSimCtrl::MemWriteElf(const std::string path) {
-  uint8_t *buf;
+bool VerilatorSimCtrl::WriteElfToMem(const svScope &scope,
+                                     const std::string &filepath) {
+  bool retcode;
+  svScope prev_scope = svSetScope(scope);
+
+  uint8_t *buf = nullptr;
   size_t len_bytes;
 
-  if (!ElfFileToBinary(path.data(), (void **)&buf, len_bytes)) {
-    std::cerr << "ERROR: Could not load: " << path.data() << std::endl;
-    return EX_SOFTWARE;
+  if (!ElfFileToBinary(filepath, &buf, len_bytes)) {
+    std::cerr << "ERROR: Could not load: " << filepath << std::endl;
+    retcode = false;
+    goto ret;
   }
   for (int i = 0; i < len_bytes / 4; ++i) {
     if (simutil_verilator_set_mem(i, (svLogicVecVal *)&buf[4 * i])) {
-      std::cerr << "ERROR: Could not set memory byte: " << i*4
-                << "/" << len_bytes << "" << std::endl;
-      return EX_IOERR;
+      std::cerr << "ERROR: Could not set memory byte: " << i * 4 << "/"
+                << len_bytes << "" << std::endl;
+
+      retcode = false;
+      goto ret;
     }
   }
+
+  retcode = true;
+
+ret:
+  svSetScope(prev_scope);
   free(buf);
-  return EX_OK;
+  return retcode;
 }
 
-void VerilatorSimCtrl::MemWriteVmem(const std::string path) {
-  simutil_verilator_memload(path.data());
+bool VerilatorSimCtrl::WriteVmemToMem(const svScope &scope,
+                                      const std::string &filepath) {
+  svScope prev_scope = svSetScope(scope);
+
+  // TODO: Add error handling.
+  simutil_verilator_memload(filepath.data());
+
+  svSetScope(prev_scope);
+  return true;
 }
 
-int VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv) {
+bool VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv, bool &exit_app) {
   const struct option long_options[] = {
       {"rominit", required_argument, nullptr, 'r'},
       {"raminit", required_argument, nullptr, 'm'},
@@ -365,7 +391,6 @@ int VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv) {
       {"help", no_argument, nullptr, 'h'},
       {nullptr, no_argument, nullptr, 0}};
 
-  int retcode;
   while (1) {
     int c = getopt_long(argc, argv, ":r:f:m:l:c:th", long_options, nullptr);
     if (c == -1) {
@@ -374,54 +399,54 @@ int VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv) {
 
     // Disable error reporting by getopt
     opterr = 0;
-    std::string mem_opt;
 
     switch (c) {
       case 0:
         break;
       case 'r':
-        mem_opt.assign("rom,");
-        mem_opt.append(optarg);
-        retcode = InitMem(mem_opt);
-        if (retcode) {
+        if (!MemWrite("rom", optarg)) {
           std::cerr << "ERROR: Setting memory failed." << std::endl;
-          return retcode;
+          return false;
         }
         break;
       case 'm':
-        mem_opt.assign("ram,");
-        mem_opt.append(optarg);
-        retcode = InitMem(mem_opt);
-        if (retcode) {
+        if (!MemWrite("ram", optarg)) {
           std::cerr << "ERROR: Setting memory failed." << std::endl;
-          return retcode;
+          return false;
         }
         break;
       case 'f':
-        mem_opt.assign("flash,");
-        mem_opt.append(optarg);
-        retcode = InitMem(mem_opt);
-        if (retcode) {
+        if (!MemWrite("flash", optarg)) {
           std::cerr << "ERROR: Setting memory failed." << std::endl;
-          return retcode;
+          return false;
         }
         break;
-      case 'l':
-        retcode = InitMem(optarg);
-        if (retcode) {
-          // For listing the memory (-l list) we need to stop execution but
-          // this should not be printed as an error
-          if (retcode != kMemList) {
-            std::cerr << "ERROR: Setting memory failed." << std::endl;
-          }
-          return retcode;
+      case 'l': {
+        if (strcasecmp(optarg, "list") == 0) {
+          PrintMemRegions();
+          exit_app = true;
+          return true;
         }
-        break;
+
+        std::string name;
+        std::string filepath;
+        MemImageType type;
+        if (!ParseMemArg(optarg, name, filepath, type)) {
+          std::cerr << "ERROR: Unable to parse meminit arguments." << std::endl;
+          return false;
+        }
+
+        if (!MemWrite(name, filepath, type)) {
+          std::cerr << "ERROR: Setting memory " << name << " failed."
+                    << std::endl;
+          return false;
+        }
+      } break;
       case 't':
         if (!tracing_possible_) {
           std::cerr << "ERROR: Tracing has not been enabled at compile time."
                     << std::endl;
-          return EX_USAGE;
+          return false;
         }
         TraceOn();
         break;
@@ -429,11 +454,12 @@ int VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv) {
         term_after_cycles_ = atoi(optarg);
         break;
       case ':':  // missing argument
-        std::cerr << "ERROR: Missing argument." << std::endl;
+        std::cerr << "ERROR: Missing argument." << std::endl << std::endl;
         // Intended fall through
       case 'h':
         PrintHelp();
-        return EX_USAGE;
+        exit_app = true;
+        return true;
       case '?':
       default:;
         // Ignore unrecognized options since they might be consumed by
@@ -442,7 +468,7 @@ int VerilatorSimCtrl::ParseCommandArgs(int argc, char **argv) {
   }
 
   Verilated::commandArgs(argc, argv);
-  return EX_OK;
+  return true;
 }
 
 void VerilatorSimCtrl::Trace() {
@@ -463,15 +489,15 @@ void VerilatorSimCtrl::Trace() {
   }
 
   if (!tracer_.isOpen()) {
-    tracer_.open(GetSimulationFileName());
-    std::cout << "Writing simulation traces to " << GetSimulationFileName()
+    tracer_.open(GetTraceFileName());
+    std::cout << "Writing simulation traces to " << GetTraceFileName()
               << std::endl;
   }
 
   tracer_.dump(GetTime());
 }
 
-const char *VerilatorSimCtrl::GetSimulationFileName() const {
+const char *VerilatorSimCtrl::GetTraceFileName() const {
 #ifdef VM_TRACE_FMT_FST
   return "sim.fst";
 #else
@@ -487,11 +513,11 @@ void VerilatorSimCtrl::Run() {
   // We always need to enable this as tracing can be enabled at runtime
   if (tracing_possible_) {
     Verilated::traceEverOn(true);
-    top_->trace(tracer_, 99, 0);
+    top_.trace(tracer_, 99, 0);
   }
 
   // Evaluate all initial blocks, including the DPI setup routines
-  top_->eval();
+  top_.eval();
 
   std::cout << std::endl
             << "Simulation running, end by pressing CTRL-c." << std::endl;
@@ -513,7 +539,7 @@ void VerilatorSimCtrl::Run() {
       callback_(time_);
     }
 
-    top_->eval();
+    top_.eval();
     time_++;
 
     Trace();
@@ -535,7 +561,7 @@ void VerilatorSimCtrl::Run() {
     }
   }
 
-  top_->final();
+  top_.final();
   time_end_ = std::chrono::steady_clock::now();
 
   if (TracingEverEnabled()) {
@@ -567,12 +593,12 @@ void VerilatorSimCtrl::SetResetDuration(unsigned int cycles) {
   reset_duration_cycles_ = cycles;
 }
 
-bool VerilatorSimCtrl::IsFileReadable(std::string filepath) {
+bool VerilatorSimCtrl::IsFileReadable(std::string filepath) const {
   struct stat statbuf;
   return stat(filepath.data(), &statbuf) == 0;
 }
 
-bool VerilatorSimCtrl::FileSize(std::string filepath, int &size_byte) {
+bool VerilatorSimCtrl::FileSize(std::string filepath, int &size_byte) const {
   struct stat statbuf;
   if (stat(filepath.data(), &statbuf) != 0) {
     size_byte = 0;
@@ -583,13 +609,13 @@ bool VerilatorSimCtrl::FileSize(std::string filepath, int &size_byte) {
   return true;
 }
 
-unsigned int VerilatorSimCtrl::GetExecutionTimeMs() {
+unsigned int VerilatorSimCtrl::GetExecutionTimeMs() const {
   return std::chrono::duration_cast<std::chrono::milliseconds>(time_end_ -
                                                                time_begin_)
       .count();
 }
 
-void VerilatorSimCtrl::PrintStatistics() {
+void VerilatorSimCtrl::PrintStatistics() const {
   double speed_hz = time_ / 2 / (GetExecutionTimeMs() / 1000.0);
   double speed_khz = speed_hz / 1000.0;
 
@@ -603,13 +629,14 @@ void VerilatorSimCtrl::PrintStatistics() {
             << "(" << speed_khz << " kHz)" << std::endl;
 
   int trace_size_byte;
-  if (tracing_enabled_ && FileSize(GetSimulationFileName(), trace_size_byte)) {
+  if (tracing_enabled_ && FileSize(GetTraceFileName(), trace_size_byte)) {
     std::cout << "Trace file size:  " << trace_size_byte << " B" << std::endl;
   }
 }
 
-bool VerilatorSimCtrl::ElfFileToBinary(std::string file_name, void **data,
-                                       size_t &len_bytes) {
+bool VerilatorSimCtrl::ElfFileToBinary(const std::string &filepath,
+                                       uint8_t **data,
+                                       size_t &len_bytes) const {
   bool retval;
   std::list<BufferDesc> buffers;
   size_t offset = 0;
@@ -621,34 +648,34 @@ bool VerilatorSimCtrl::ElfFileToBinary(std::string file_name, void **data,
     return false;
   }
 
-  int fd = open(file_name.c_str(), O_RDONLY, 0);
+  int fd = open(filepath.c_str(), O_RDONLY, 0);
   if (fd < 0) {
-    std::cerr << "Could not open file: " << file_name << std::endl;
+    std::cerr << "Could not open file: " << filepath << std::endl;
     return false;
   }
 
   Elf *elf_desc;
   elf_desc = elf_begin(fd, ELF_C_READ, NULL);
   if (elf_desc == NULL) {
-    std::cerr << elf_errmsg(-1) << " in: " << file_name << std::endl;
+    std::cerr << elf_errmsg(-1) << " in: " << filepath << std::endl;
     retval = false;
     goto return_fd_end;
   }
   if (elf_kind(elf_desc) != ELF_K_ELF) {
-    std::cerr << "Not a ELF file: " << file_name << std::endl;
+    std::cerr << "Not a ELF file: " << filepath << std::endl;
     retval = false;
     goto return_elf_end;
   }
   // TODO: add support for ELFCLASS64
   if (gelf_getclass(elf_desc) != ELFCLASS32) {
-    std::cerr << "Not a 32-bit ELF file: " << file_name << std::endl;
+    std::cerr << "Not a 32-bit ELF file: " << filepath << std::endl;
     retval = false;
     goto return_elf_end;
   }
 
   size_t phnum;
   if (elf_getphdrnum(elf_desc, &phnum) != 0) {
-    std::cerr << elf_errmsg(-1) << " in: " << file_name << std::endl;
+    std::cerr << elf_errmsg(-1) << " in: " << filepath << std::endl;
     retval = false;
     goto return_elf_end;
   }
@@ -659,7 +686,7 @@ bool VerilatorSimCtrl::ElfFileToBinary(std::string file_name, void **data,
   for (size_t i = 0; i < phnum; i++) {
     if (gelf_getphdr(elf_desc, i, &phdr) == NULL) {
       std::cerr << elf_errmsg(-1) << " segment number: " << i
-                << " in: " << file_name << std::endl;
+                << " in: " << filepath << std::endl;
       retval = false;
       goto return_elf_end;
     }

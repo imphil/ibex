@@ -5,13 +5,12 @@
 #ifndef VERILATOR_SIM_CTRL_H_
 #define VERILATOR_SIM_CTRL_H_
 
-#include <verilated.h>
-
 #include <chrono>
-#include <string>
 #include <functional>
 #include <map>
-#include <sysexits.h>
+#include <string>
+
+#include <verilated.h>
 
 #include "verilated_toplevel.h"
 
@@ -24,45 +23,43 @@ enum VerilatorSimCtrlFlags {
 // The parameter is simulation time
 typedef std::function<void(int /* sim time */)> SimCtrlCallBack;
 
-enum MemInitType {
-  kUnknown = 0,
-  kEmpty,
-  kElf,
-  kVmem,
-};
-
-enum SimError {
-  kMemList = EX__MAX + 1,
+enum MemImageType {
+  kMemImageUnknown = 0,
+  kMemImageElf,
+  kMemImageVmem,
 };
 
 struct MemArea {
   std::string name;      // Unique identifier
   std::string location;  // Design scope location
-  std::string path;      // System file path
-  MemInitType type;      // Type of init file
 };
 
-struct BufferDesc {
-  uint8_t *data;
-  size_t length;
-};
-
+/**
+ * Simulation controller for verilated simulations
+ */
 class VerilatorSimCtrl {
  public:
-  VerilatorSimCtrl(VerilatedToplevel *top, CData &clk, CData &rst_n,
+  VerilatorSimCtrl(VerilatedToplevel &top, CData &clk, CData &rst_n,
                    VerilatorSimCtrlFlags flags = Defaults);
 
   /**
-   * A helper function to execute some standard setup commands.
+   * Setup and run the simulation (all in one)
    *
-   * This function performs the followind tasks:
+   * Use this function as high-level entry point, suitable for most use cases.
+   *
+   * Exec() can be used only once per process as it registers a global signal
+   * handler.
+   *
+   * This function performs the following tasks:
    * 1. Sets up a signal handler to enable tracing to be turned on/off during
    *    a run by sending SIGUSR1 to the process
-   * 2. Parses a C-style set of command line arguments (see ParseCommandArgs())
+   * 2. Parses a C-style set of command line arguments.
+   * 3. Runs the simulation
    *
-   * @return return code (0 = success)
+   * @return a main()-compatible process exit code: 0 for success, 1 in case
+   *         of an error.
    */
-  int SetupSimulation(int argc, char **argv);
+  int Exec(int argc, char **argv);
 
   /**
    * A helper function to execute a standard set of run commands.
@@ -74,11 +71,6 @@ class VerilatorSimCtrl {
    *    has run to completion
    */
   void RunSimulation();
-
-  /**
-   * Register the signal handler
-   */
-  void RegisterSignalHandler();
 
   /**
    * Print help how to use this tool
@@ -107,14 +99,21 @@ class VerilatorSimCtrl {
   bool RegisterMemoryArea(const std::string name, const std::string location);
 
   /**
+   * Print a list of all registered memory regions
+   *
+   * @see RegisterMemoryArea()
+   */
+  void PrintMemRegions() const;
+
+  /**
    * Get the current time in ticks
    */
-  unsigned long GetTime() { return time_; }
+  unsigned long GetTime() const { return time_; }
 
   /**
    * Get the simulation result
    */
-  bool WasSimulationSuccessful() { return simulation_success_; }
+  bool WasSimulationSuccessful() const { return simulation_success_; }
 
   /**
    * Set the number of clock cycles (periods) before the reset signal is
@@ -152,26 +151,29 @@ class VerilatorSimCtrl {
   /**
    * Is tracing currently enabled?
    */
-  bool TracingEnabled() { return tracing_enabled_; }
+  bool TracingEnabled() const { return tracing_enabled_; }
 
   /**
    * Has tracing been ever enabled during the run?
    *
    * Tracing can be enabled and disabled at runtime.
    */
-  bool TracingEverEnabled() { return tracing_ever_enabled_; }
+  bool TracingEverEnabled() const { return tracing_ever_enabled_; }
 
   /**
    * Is tracing support compiled into the simulation?
    */
-  bool TracingPossible() { return tracing_possible_; }
+  bool TracingPossible() const { return tracing_possible_; }
 
   /**
    * Print statistics about the simulation run
    */
-  void PrintStatistics();
+  void PrintStatistics() const;
 
-  const char *GetSimulationFileName() const;
+  /**
+   * Get the file name of the trace file
+   */
+  const char *GetTraceFileName() const;
 
   /**
    * Set a callback function to run every cycle
@@ -179,7 +181,7 @@ class VerilatorSimCtrl {
   void SetOnClockCallback(SimCtrlCallBack callback);
 
  private:
-  VerilatedToplevel *top_;
+  VerilatedToplevel &top_;
   CData &sig_clk_;
   CData &sig_rst_;
   VerilatorSimCtrlFlags flags_;
@@ -200,6 +202,11 @@ class VerilatorSimCtrl {
   SimCtrlCallBack callback_;
 
   /**
+   * Register the signal handler
+   */
+  void RegisterSignalHandler();
+
+  /**
    * Parse command line arguments
    *
    * This removes all recognized command-line arguments from argc/argv.
@@ -208,22 +215,38 @@ class VerilatorSimCtrl {
    * retcode: if this method returns true, do *not* exit; if it returns *false*,
    * do exit.
    */
-  int ParseCommandArgs(int argc, char **argv);
-  unsigned int GetExecutionTimeMs();
+  bool ParseCommandArgs(int argc, char **argv, bool &exit_app);
+
+  /**
+   * Parse argument section specific to memory initialization.
+   *
+   * Must be in the form of: name,file[,type].
+   */
+  bool ParseMemArg(std::string mem_argument, std::string &name,
+                   std::string &filepath, MemImageType &type);
+  MemImageType DetectMemImageType(const std::string filepath);
+  MemImageType GetMemImageTypeByName(const std::string name);
+
+  unsigned int GetExecutionTimeMs() const;
   void SetReset();
   void UnsetReset();
-  bool IsFileReadable(std::string filepath);
-  bool FileSize(std::string filepath, int &size_byte);
+  bool IsFileReadable(std::string filepath) const;
+  bool FileSize(std::string filepath, int &size_byte) const;
   void Trace();
-  bool ElfFileToBinary(std::string file_name, void **data, size_t &len_bytes);
-  int InitMem(std::string mem_argument);
-  MemInitType ExtractTypeFromName(std::string filename);
-  MemInitType GetMemInitType(std::string name);
-  int ParseMemArg(std::string mem_argument, MemArea *m);
-  int MemWrite(MemArea &m);
-  int MemWriteElf(const std::string path);
-  void MemWriteVmem(const std::string path);
-  void PrintMemRegions();
+
+  /**
+   * Dump an ELF file into a raw binary
+   */
+  bool ElfFileToBinary(const std::string &filepath, uint8_t **data,
+                       size_t &len_bytes) const;
+
+  bool MemWrite(const std::string &name, const std::string &filepath);
+  bool MemWrite(const std::string &name, const std::string &filepath,
+                MemImageType type);
+  bool MemWrite(const MemArea &m, const std::string &filepath,
+                MemImageType type);
+  bool WriteElfToMem(const svScope &scope, const std::string &filepath);
+  bool WriteVmemToMem(const svScope &scope, const std::string &filepath);
 };
 
 #endif  // VERILATOR_SIM_CTRL_H_
