@@ -48,6 +48,9 @@ module ibex_core #(
     input  logic [31:0] instr_rdata_i,
     input  logic        instr_err_i,
 
+    // RV Trace signals
+    output logic        rvt_instruction_valid,
+
     // Data memory interface
     output logic        data_req_o,
     input  logic        data_gnt_i,
@@ -1289,5 +1292,7 @@ module ibex_core #(
   end
 
 `endif
+
+  assign rvtrace_instruction_valid = rvfi_valid;
 
 endmodule
