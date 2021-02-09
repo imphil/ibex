@@ -2,16 +2,17 @@
 
 # Ibex RISC-V Core
 
-Ibex is a small and efficient, 32-bit, in-order RISC-V core with a 2-stage pipeline that implements
-the RV32IMC instruction set architecture.
+Ibex is a production-quality open source 32 bit RISC-V CPU core written in
+SystemVerilog. The CPU core is heavily parametrizable and well suited for
+embedded control applications. Ibex is being extensively verified and has
+seen multiple tape-outs. Ibex supports the Integer (I) or Embedded (E),
+Integer Multiplication and Division (M), Compressed (C), and B (Bit
+Manipulation) extensions.
 
-<p align="center"><img src="doc/03_reference/images/blockdiagram.svg" width="650"></p>
-
-This core was initially developed as part of the [PULP platform](https://www.pulp-platform.org)
+Ibex was initially developed as part of the [PULP platform](https://www.pulp-platform.org)
 under the name "Zero-riscy" \[[1](https://doi.org/10.1109/PATMOS.2017.8106976)\], and has been
 contributed to [lowRISC](https://www.lowrisc.org) who maintains it and develops it further. It is
-under active development, with further code cleanups, feature additions, and test and verification
-planned for the future.
+under active development.
 
 ## Configuration
 
